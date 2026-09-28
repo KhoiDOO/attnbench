@@ -1,12 +1,12 @@
 # Blender 4.5.7 LTS MTL File: 'main.blend'
 # www.blender.org
 
-newmtl Crystal_Glass_Master
-Ns 976.143982
+newmtl Clear_Crystal_Glass
+Ns 984.063965
 Ka 1.000000 1.000000 1.000000
 Kd 1.000000 1.000000 1.000000
-Ks 0.500000 0.500000 0.500000
+Ks 0.550000 0.550000 0.550000
 Ke 0.000000 0.000000 0.000000
-Ni 1.517000
+Ni 1.500000
 d 1.000000
 illum 2

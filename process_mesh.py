@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Import an OBJ file into Blender collection 'main', name it 'mesh',
-
-apply a realistic physical crystal glass material (pure refraction, Fresnel, caustics,
-zero tree/environment reflections), configure studio softbox lighting, set viewport to
-real-time Cycles Metal GPU rendering, and export to PLY, GLB, USDZ, and OBJ+MTL.
+stand it upright facing front, normalize it to center at origin (0, 0, 0)
+and scale to [-5, -5, -5] to [5, 5, 5] (a box), apply crystal-clear luminous glass material,
+configure a light, bright studio environment with scaled edge-defining lighting,
+and export to PLY, GLB, USDZ, OBJ+MTL, and a high-resolution render.
 
 Usage:
     blender main.blend --background --python process_mesh.py -- <path_to_obj> <output_ply_or_dir>
@@ -62,8 +62,8 @@ def parse_arguments():
     return obj_path, ply_path, out_dir
 
 
-def create_realistic_glass_material(name="Realistic_Glass"):
-    """Create a physically-based crystal glass material with 100% transmission and optical IOR."""
+def create_clear_crystal_glass_material(name="Clear_Crystal_Glass"):
+    """Create a physically-based, luminous crystal clear glass material."""
     mat = bpy.data.materials.get(name)
     if mat is None:
         mat = bpy.data.materials.new(name=name)
@@ -72,47 +72,50 @@ def create_realistic_glass_material(name="Realistic_Glass"):
     nodes = mat.node_tree.nodes
     nodes.clear()
 
-    # Principled BSDF configured for physical glass
+    # Principled BSDF configured for clear crystal glass
     bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
     bsdf.location = (0, 0)
     output = nodes.new(type="ShaderNodeOutputMaterial")
     output.location = (300, 0)
     mat.node_tree.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
-    # Pure clear optical glass parameters
+    # Pure optical glass clarity
     bsdf.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    # 100% Optical light transmission
+    # 100% Light transmission
     if "Transmission Weight" in bsdf.inputs:
         bsdf.inputs["Transmission Weight"].default_value = 1.0
     elif "Transmission" in bsdf.inputs:
         bsdf.inputs["Transmission"].default_value = 1.0
-    # Optical glass Index of Refraction (standard crown glass is 1.50 - 1.52)
+    # Crown glass optical IOR
     if "IOR" in bsdf.inputs:
         bsdf.inputs["IOR"].default_value = 1.50
-    # Ultra-smooth polished glass surface
+    # Polished crystal smoothness
     if "Roughness" in bsdf.inputs:
-        bsdf.inputs["Roughness"].default_value = 0.01
-    # Physical Fresnel specular reflection
+        bsdf.inputs["Roughness"].default_value = 0.008
+    # Specular reflection
     if "Specular IOR Level" in bsdf.inputs:
-        bsdf.inputs["Specular IOR Level"].default_value = 0.5
+        bsdf.inputs["Specular IOR Level"].default_value = 0.55
 
-    # EEVEE Next & Viewport properties
+    # Subtle prism sparkle on edges
+    if "Thin Film Thickness" in bsdf.inputs:
+        bsdf.inputs["Thin Film Thickness"].default_value = 140.0
+        bsdf.inputs["Thin Film IOR"].default_value = 1.33
+
+    # Viewport settings
     if hasattr(mat, "surface_render_method"):
         mat.surface_render_method = "DITHERED"
     if hasattr(mat, "use_raytrace_refraction"):
         mat.use_raytrace_refraction = True
     if hasattr(mat, "use_screen_refraction"):
         mat.use_screen_refraction = True
-    if hasattr(mat, "refraction_depth"):
-        mat.refraction_depth = 15.0
     if hasattr(mat, "diffuse_color"):
         mat.diffuse_color = (0.95, 0.98, 1.0, 0.15)
 
     return mat
 
 
-def setup_studio_environment():
-    """Create a neutral photography studio environment with softbox lights and neutral backdrop (no trees)."""
+def setup_light_studio_environment(min_z=-5.0):
+    """Create a bright, light studio environment scaled and positioned for a normalized mesh (centered at origin, bounds in [-5, 5])."""
     scene = bpy.context.scene
 
     # 1. Studio Collection
@@ -125,91 +128,135 @@ def setup_studio_environment():
     for obj in list(studio_col.objects):
         bpy.data.objects.remove(obj, do_unlink=True)
 
-    # 2. Neutral Studio World
-    world = bpy.data.worlds.get("StudioWorld")
+    # 2. Light Studio World
+    world = bpy.data.worlds.get("LightStudioWorld")
     if world is None:
-        world = bpy.data.worlds.new("StudioWorld")
+        world = bpy.data.worlds.new("LightStudioWorld")
     scene.world = world
     world.use_nodes = True
     bg = world.node_tree.nodes.get("Background")
     if bg:
-        bg.inputs["Color"].default_value = (0.85, 0.85, 0.88, 1.0)
-        bg.inputs["Strength"].default_value = 0.8
+        bg.inputs["Color"].default_value = (0.84, 0.85, 0.88, 1.0)
+        bg.inputs["Strength"].default_value = 0.85
 
-    # 3. Softbox Lights
-    # Key Softbox (left front)
-    key_light = bpy.data.lights.new("KeySoftbox", "AREA")
-    key_light.energy = 8000.0
-    key_light.size = 200.0
-    key_light.size_y = 100.0
-    key_obj = bpy.data.objects.new("KeySoftbox", key_light)
+    # 3. Light Pedestal with soft reflection (top surface at min_z)
+    ped_depth = 0.6
+    bpy.ops.mesh.primitive_cylinder_add(radius=12.0, depth=ped_depth, location=(0, 0, min_z - ped_depth / 2.0))
+    ped = bpy.context.active_object
+    ped.name = "Pedestal"
+    studio_col.objects.link(ped)
+    scene.collection.objects.unlink(ped)
+    ped_mat = bpy.data.materials.new("LightPedestalMat")
+    ped_mat.use_nodes = True
+    pbsdf = ped_mat.node_tree.nodes.get("Principled BSDF")
+    if pbsdf:
+        pbsdf.inputs["Base Color"].default_value = (0.80, 0.82, 0.85, 1.0)
+        pbsdf.inputs["Roughness"].default_value = 0.15
+    ped.data.materials.append(ped_mat)
+
+    # 4. Light Backdrop (centered at Z=0 behind the mesh)
+    bpy.ops.mesh.primitive_plane_add(size=80.0, location=(0, 14.0, 0.0), rotation=(math.radians(90), 0, 0))
+    back = bpy.context.active_object
+    back.name = "Backdrop"
+    studio_col.objects.link(back)
+    scene.collection.objects.unlink(back)
+    bmat = bpy.data.materials.new("LightBackdropMat")
+    bmat.use_nodes = True
+    bbsdf = bmat.node_tree.nodes.get("Principled BSDF")
+    if bbsdf:
+        bbsdf.inputs["Base Color"].default_value = (0.86, 0.87, 0.90, 1.0)
+        bbsdf.inputs["Roughness"].default_value = 0.6
+    back.data.materials.append(bmat)
+
+    # 5. Studio Lights (scaled to normalized ~10 unit scene)
+    # Key Light (front left)
+    key = bpy.data.lights.new("KeySoftbox", "AREA")
+    key.energy = 22.0
+    key.size = 12.0
+    key.size_y = 8.0
+    key_obj = bpy.data.objects.new("KeySoftbox", key)
     studio_col.objects.link(key_obj)
-    key_obj.location = (-150, -180, 150)
-    key_obj.rotation_euler = (math.radians(50), math.radians(10), math.radians(-35))
+    key_obj.location = (-10.5, -12.0, 5.0)
+    key_obj.rotation_euler = (math.radians(50), math.radians(10), math.radians(-40))
 
-    # Fill Softbox (right front)
-    fill_light = bpy.data.lights.new("FillSoftbox", "AREA")
-    fill_light.energy = 3000.0
-    fill_light.size = 180.0
-    fill_obj = bpy.data.objects.new("FillSoftbox", fill_light)
+    # Fill Light (front right)
+    fill = bpy.data.lights.new("FillSoftbox", "AREA")
+    fill.energy = 13.0
+    fill.size = 12.0
+    fill.size_y = 8.0
+    fill_obj = bpy.data.objects.new("FillSoftbox", fill)
     studio_col.objects.link(fill_obj)
-    fill_obj.location = (160, -140, 80)
-    fill_obj.rotation_euler = (math.radians(60), 0, math.radians(45))
+    fill_obj.location = (10.5, -12.0, 3.5)
+    fill_obj.rotation_euler = (math.radians(50), math.radians(-10), math.radians(40))
 
-    # Rim Softbox (behind and above - creates crystal edge gleam)
-    rim_light = bpy.data.lights.new("RimSoftbox", "AREA")
-    rim_light.energy = 6000.0
-    rim_light.size = 150.0
-    rim_obj = bpy.data.objects.new("RimSoftbox", rim_light)
+    # Left & Right Edge Strips (give glass clear, crisp outlines)
+    left_edge = bpy.data.lights.new("LeftEdge", "AREA")
+    left_edge.energy = 26.0
+    left_edge.size = 2.6
+    left_edge.size_y = 18.5
+    left_edge_obj = bpy.data.objects.new("LeftEdge", left_edge)
+    studio_col.objects.link(left_edge_obj)
+    left_edge_obj.location = (-10.0, -2.6, 2.3)
+    left_edge_obj.rotation_euler = (math.radians(15), math.radians(5), math.radians(-75))
+
+    right_edge = bpy.data.lights.new("RightEdge", "AREA")
+    right_edge.energy = 26.0
+    right_edge.size = 2.6
+    right_edge.size_y = 18.5
+    right_edge_obj = bpy.data.objects.new("RightEdge", right_edge)
+    studio_col.objects.link(right_edge_obj)
+    right_edge_obj.location = (10.0, -2.6, 2.3)
+    right_edge_obj.rotation_euler = (math.radians(15), math.radians(-5), math.radians(75))
+
+    # Top Rim Light
+    rim = bpy.data.lights.new("TopRim", "AREA")
+    rim.energy = 22.0
+    rim.size = 12.0
+    rim.size_y = 5.3
+    rim_obj = bpy.data.objects.new("TopRim", rim)
     studio_col.objects.link(rim_obj)
-    rim_obj.location = (0, 160, 180)
-    rim_obj.rotation_euler = (math.radians(-50), 0, math.radians(180))
+    rim_obj.location = (0, 4.6, 12.2)
+    rim_obj.rotation_euler = (math.radians(-30), 0, math.radians(180))
 
-    # 4. Neutral Studio Backdrop Plane
-    backdrop_mesh = bpy.data.meshes.new("StudioBackdrop")
-    backdrop_obj = bpy.data.objects.new("StudioBackdrop", backdrop_mesh)
-    studio_col.objects.link(backdrop_obj)
+    # Dark contour cards (far on sides, out of camera view, carving out clean edge definition)
+    cmat = bpy.data.materials.new("DarkCardMat")
+    cmat.use_nodes = True
+    cmat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.05, 0.05, 0.05, 1.0)
 
-    # Create plane geometry
-    s = 300.0
-    verts = [(-s, -s + 50, -50), (s, -s + 50, -50), (s, s + 50, -50), (-s, s + 50, -50)]
-    faces = [(0, 1, 2, 3)]
-    backdrop_mesh.from_pydata(verts, [], faces)
-    backdrop_mesh.update()
+    bpy.ops.mesh.primitive_plane_add(size=20.0, location=(-13.5, 0, 0), rotation=(0, math.radians(90), 0))
+    card_l = bpy.context.active_object
+    card_l.name = "DarkCardLeft"
+    studio_col.objects.link(card_l)
+    scene.collection.objects.unlink(card_l)
+    card_l.data.materials.append(cmat)
 
-    backdrop_mat = bpy.data.materials.get("StudioBackdropMat")
-    if backdrop_mat is None:
-        backdrop_mat = bpy.data.materials.new("StudioBackdropMat")
-    backdrop_mat.use_nodes = True
-    bsdf = backdrop_mat.node_tree.nodes.get("Principled BSDF")
-    if bsdf:
-        bsdf.inputs["Base Color"].default_value = (0.7, 0.72, 0.75, 1.0)
-        bsdf.inputs["Roughness"].default_value = 0.4
-    backdrop_obj.data.materials.append(backdrop_mat)
+    bpy.ops.mesh.primitive_plane_add(size=20.0, location=(13.5, 0, 0), rotation=(0, math.radians(90), 0))
+    card_r = bpy.context.active_object
+    card_r.name = "DarkCardRight"
+    studio_col.objects.link(card_r)
+    scene.collection.objects.unlink(card_r)
+    card_r.data.materials.append(cmat)
 
-    # 5. Studio Camera
-    cam_data = bpy.data.cameras.get("StudioCamera")
-    if cam_data is None:
-        cam_data = bpy.data.cameras.new("StudioCamera")
-    cam_obj = bpy.data.objects.get("StudioCamera")
-    if cam_obj is None:
-        cam_obj = bpy.data.objects.new("StudioCamera", cam_data)
-        studio_col.objects.link(cam_obj)
+    # 6. Hero Camera (Framing full upright figure centered at origin)
+    cam_data = bpy.data.cameras.new("StudioCamera")
+    cam_obj = bpy.data.objects.new("StudioCamera", cam_data)
+    studio_col.objects.link(cam_obj)
     scene.camera = cam_obj
-    cam_obj.location = (0, -220, 20)
-    cam_obj.rotation_euler = (math.radians(83), 0, 0)
+
+    cam_obj.location = (-1.3, -19.2, 1.1)
+    cam_obj.rotation_euler = (math.radians(86.7), 0, math.radians(-3.9))
+    cam_data.lens = 65.0
+    cam_data.clip_start = 0.1
+    cam_data.clip_end = 1000.0
 
 
-def configure_render_engine_and_viewport():
-    """Configure Cycles with Apple Metal GPU and set viewport to real-time Rendered mode."""
+def configure_render_engine():
+    """Configure Cycles path tracer with Apple Metal GPU acceleration."""
     scene = bpy.context.scene
-
-    # Set Cycles path tracing engine
     scene.render.engine = "CYCLES"
     scene.cycles.use_denoising = True
     scene.cycles.samples = 64
 
-    # Enable Apple Silicon Metal GPU acceleration if available
     try:
         cycles_prefs = bpy.context.preferences.addons["cycles"].preferences
         device_types = cycles_prefs.get_device_types(bpy.context)
@@ -223,16 +270,6 @@ def configure_render_engine_and_viewport():
             print("Enabled Cycles Metal GPU acceleration.")
     except Exception as e:
         print(f"Cycles device notice: {e}")
-
-    # Set 3D Viewports to RENDERED mode for real-time ray-traced glass
-    for screen in bpy.data.screens:
-        for area in screen.areas:
-            if area.type == "VIEW_3D":
-                for space in area.spaces:
-                    if space.type == "VIEW_3D":
-                        space.shading.type = "RENDERED"
-                        space.shading.use_scene_lights = True
-                        space.shading.use_scene_world = True
 
 
 def process_mesh(obj_path, ply_path, out_dir):
@@ -276,7 +313,6 @@ def process_mesh(obj_path, ply_path, out_dir):
     if not new_objects:
         raise RuntimeError(f"No objects imported from {obj_path}")
 
-    # Find the mesh object
     mesh_objects = [o for o in new_objects if o.type == "MESH"]
     target_obj = mesh_objects[0] if mesh_objects else new_objects[0]
 
@@ -284,12 +320,40 @@ def process_mesh(obj_path, ply_path, out_dir):
     target_obj.name = "mesh"
     if target_obj.data:
         target_obj.data.name = "mesh"
-    print(f"Renamed imported object to: {target_obj.name}")
+
+    # Stand upright (+90X) and face forward (180Z)
+    target_obj.rotation_euler = (math.radians(90), 0, math.radians(180))
+    bpy.ops.object.transform_apply(rotation=True)
 
     # Enable smooth shading
     if target_obj.data:
         for poly in target_obj.data.polygons:
             poly.use_smooth = True
+
+    # Normalize: center at origin (0, 0, 0) and scale into [-5, -5, -5] to [5, 5, 5] (a box)
+    coords = [v.co for v in target_obj.data.vertices]
+    min_x = min(v.x for v in coords)
+    max_x = max(v.x for v in coords)
+    min_y = min(v.y for v in coords)
+    max_y = max(v.y for v in coords)
+    min_z = min(v.z for v in coords)
+    max_z = max(v.z for v in coords)
+
+    center_x = (min_x + max_x) / 2.0
+    center_y = (min_y + max_y) / 2.0
+    center_z = (min_z + max_z) / 2.0
+
+    max_extent = max(max_x - min_x, max_y - min_y, max_z - min_z)
+    scale_factor = 10.0 / max_extent if max_extent > 0 else 1.0
+
+    target_obj.location = (-center_x, -center_y, -center_z)
+    bpy.ops.object.transform_apply(location=True)
+    target_obj.scale = (scale_factor, scale_factor, scale_factor)
+    bpy.ops.object.transform_apply(scale=True)
+
+    norm_coords = [v.co for v in target_obj.data.vertices]
+    norm_min_z = min(v.z for v in norm_coords)
+    print(f"Normalized mesh: centered at origin (0, 0, 0), scaled by factor {scale_factor:.6f} to fit inside [-5, 5]^3 box.")
 
     # 5. Move object exclusively into collection 'main'
     if target_obj.name not in main_col.objects:
@@ -298,14 +362,14 @@ def process_mesh(obj_path, ply_path, out_dir):
     for col in list(target_obj.users_collection):
         if col != main_col:
             col.objects.unlink(target_obj)
-    print(f"Linked '{target_obj.name}' to collection 'main'.")
+    print(f"Linked '{target_obj.name}' upright in collection 'main'.")
 
-    # 6. Create and assign realistic physical glass material
-    glass_mat = create_realistic_glass_material("Realistic_Glass")
+    # 6. Create and assign clear crystal glass material
+    glass_mat = create_clear_crystal_glass_material("Clear_Crystal_Glass")
     if target_obj.data:
         target_obj.data.materials.clear()
         target_obj.data.materials.append(glass_mat)
-    print("Created and assigned realistic physical glass material.")
+    print("Created and assigned clear crystal glass material.")
 
     # Select target object
     bpy.ops.object.select_all(action="DESELECT")
@@ -319,8 +383,8 @@ def process_mesh(obj_path, ply_path, out_dir):
         bpy.ops.export_mesh.ply(filepath=ply_path, use_selection=True)
     print(f"Exported mesh to PLY: {ply_path}")
 
-    # 8. Export to formats that preserve physical glass material:
-    # A) GLB (glTF 2.0 Binary) with KHR_materials_transmission & KHR_materials_ior
+    # 8. Export to formats preserving clear glass:
+    # A) GLB with KHR_materials_transmission
     glb_path = os.path.join(out_dir, f"{obj_stem}_transparent.glb")
     if hasattr(bpy.ops.export_scene, "gltf"):
         bpy.ops.export_scene.gltf(
@@ -342,7 +406,7 @@ def process_mesh(obj_path, ply_path, out_dir):
         except Exception as e:
             print(f"USDZ export notice: {e}")
 
-    # C) OBJ + MTL with optical density (Ni 1.5, d 0.05)
+    # C) OBJ + MTL with optical density
     obj_out_path = os.path.join(out_dir, f"{obj_stem}_transparent.obj")
     if hasattr(bpy.ops.wm, "obj_export"):
         bpy.ops.wm.obj_export(
@@ -351,13 +415,23 @@ def process_mesh(obj_path, ply_path, out_dir):
         )
         print(f"Exported material-preserved mesh to OBJ+MTL: {obj_out_path}")
 
-    # 9. Setup studio softbox lighting and neutral background
-    setup_studio_environment()
+    # 9. Setup light studio environment and lighting scaled to normalized bounds
+    setup_light_studio_environment(min_z=norm_min_z)
 
-    # 10. Configure Cycles GPU (Metal) and real-time Rendered viewport
-    configure_render_engine_and_viewport()
+    # 10. Configure Cycles Metal GPU
+    configure_render_engine()
 
-    # 11. Save the blend file
+    # 11. Render hero image
+    render_path = os.path.join(out_dir, f"{obj_stem}_render.png")
+    scene = bpy.context.scene
+    scene.render.resolution_x = 1200
+    scene.render.resolution_y = 1200
+    scene.render.filepath = render_path
+    print(f"Rendering normalized hero image to: {render_path}")
+    bpy.ops.render.render(write_still=True)
+    print(f"Render complete: {render_path}")
+
+    # 12. Save the blend file
     if bpy.data.filepath:
         bpy.ops.wm.save_mainfile()
         print(f"Saved blend file to: {bpy.data.filepath}")
